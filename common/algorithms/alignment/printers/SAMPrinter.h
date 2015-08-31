@@ -24,7 +24,7 @@
 namespace SAMOutput {
 
   enum Clipping {hard, soft, subread, none};
-
+	static string SAMVersion;
   void BuildFlag(T_AlignmentCandidate &alignment, AlignmentContext &context, uint16_t &flag) {
 
     /*
@@ -97,7 +97,6 @@ namespace SAMOutput {
 		else if (clipping == soft) {
       clippedReadLength = read.length - read.lowQualityPrefix - read.lowQualitySuffix;
 			clippedStartPos   = read.lowQualityPrefix;
-
 		}
 		else if (clipping == subread) {
 			clippedReadLength = read.subreadEnd - read.subreadStart;
@@ -139,23 +138,61 @@ namespace SAMOutput {
  }
 
  void AddGaps(T_AlignmentCandidate &alignment, int gapIndex,
-              vector<int> &opSize, vector<char> &opChar) {
+              vector<int> &opSize, vector<char> &opChar, int &qPos, int &tPos) {
    int g;
    for (g = 0; g < alignment.gaps[gapIndex].size(); g++) {
      if (alignment.gaps[gapIndex][g].seq == Gap::Query) {
        opSize.push_back(alignment.gaps[gapIndex][g].length);
        opChar.push_back('D');
+			 tPos += alignment.gaps[gapIndex][g].length;
      }
      else if (alignment.gaps[gapIndex][g].seq == Gap::Target) {
        opSize.push_back(alignment.gaps[gapIndex][g].length);
        opChar.push_back('I');
+			 qPos += alignment.gaps[gapIndex][g].length;
      }
    }
  }
 
+ void AddUngappedOperations(T_AlignmentCandidate &alignment, 
+														int blockIndex,
+														int qPos,
+														int tPos,
+														vector<int> &opSize, 
+														vector<char> &opChar) {
+	 int i;
+	 int opStart;
+	 i = 0;
+	 string qstr, tstr;
+	 qstr.insert(0, (char*) &alignment.qAlignedSeq.seq[qPos], alignment.blocks[blockIndex].length);
+	 tstr.insert(0, (char*) &alignment.tAlignedSeq.seq[tPos], alignment.blocks[blockIndex].length);
+	 while (i < alignment.blocks[blockIndex].length) {
+		 opStart = i;
+		 while (i < alignment.blocks[blockIndex].length and 
+						alignment.qAlignedSeq.seq[qPos+i] != alignment.tAlignedSeq.seq[tPos+i]) {
+			 i+=1;
+		 }
+		 if (i > opStart) {
+			 opSize.push_back(i - opStart);
+			 opChar.push_back('X');
+		 }
+		 opStart = i;
+		 while (i < alignment.blocks[blockIndex].length and 
+						alignment.qAlignedSeq.seq[qPos+i] == alignment.tAlignedSeq.seq[tPos+i]) {
+			 i+=1;
+		 }
+		 if (i > opStart) {
+			 opSize.push_back(i - opStart);
+			 opChar.push_back('=');
+		 }
+	 }		 
+ }
+
  void CreateNoClippingCigarOps(T_AlignmentCandidate &alignment, 
-                                vector<int> &opSize, 
-                                vector<char> &opChar) {
+															 int qPos,
+															 int tPos,
+															 vector<int> &opSize, 
+															 vector<char> &opChar) {
     //
     // Create the cigar string for the aligned region of a read,
     // excluding the clipping.
@@ -164,13 +201,12 @@ namespace SAMOutput {
     // Each block creates a match NM (N=block.length)
     int nBlocks = alignment.blocks.size();
     int nGaps   = alignment.gaps.size();
-    opSize.clear();
-    opChar.clear();
+
     //
     // Add gaps at the beginning of the alignment.
     //
     if (nGaps > 0) {
-      AddGaps(alignment, 0, opSize, opChar);
+      AddGaps(alignment, 0, opSize, opChar, qPos, tPos);
     }
     for (b = 0; b < nBlocks; b++) {
       //
@@ -181,38 +217,44 @@ namespace SAMOutput {
       int qGap=0, tGap=0, commonGap=0;
       int matchLength = alignment.blocks[b].length;
       if (nGaps == 0) {
+				qGap = 0;
+				tGap = 0;
+				//
+				// For blocks in the middle of gaps, add insertion or deletion characters.
+				//
         if (b + 1 < nBlocks) {
           qGap = alignment.blocks[b+1].qPos - alignment.blocks[b].qPos - alignment.blocks[b].length;
           tGap = alignment.blocks[b+1].tPos - alignment.blocks[b].tPos - alignment.blocks[b].length;
-          int commonGap;
-          commonGap = abs(qGap - tGap);
-          qGap -= commonGap;
-          tGap -= commonGap;
-          matchLength += commonGap;
-          opSize.push_back(matchLength);
-          opChar.push_back('M');
-          assert((qGap > 0 and tGap == 0) or (qGap == 0 and tGap > 0));
-          if (qGap > 0) {
-            opSize.push_back(qGap);
-            opChar.push_back('I');
-          }
-          if (tGap > 0) {
-            opSize.push_back(tGap);
-            opChar.push_back('D'); 
-          }
-        }
+				}
+				if (qGap > 0 and tGap > 0) {
+					int commonGap;
+					commonGap = min(qGap, tGap);
+					qGap -= commonGap;
+					tGap -= commonGap;
+					matchLength += commonGap;
+				}
+				AddUngappedOperations(alignment, b, qPos, tPos, opSize, opChar);
+				qPos += alignment.blocks[b].length;
+				tPos += alignment.blocks[b].length;
+				if (qGap > 0 or tGap > 0) {
+					if (qGap > 0) {
+						opSize.push_back(qGap);
+						opChar.push_back('I');
+						qPos += qGap;
+					}
+					if (tGap > 0) {
+						opSize.push_back(tGap);
+						opChar.push_back('D'); 
+						tPos += tGap;
+					}
+				}
       }
       else {
-        opSize.push_back(matchLength);
-        opChar.push_back('M');
-        int g;
-        int gapIndex = b+1;
-        AddGaps(alignment, gapIndex, opSize, opChar);
+				AddUngappedOperations(alignment, b, qPos, tPos, opSize, opChar);
+				qPos += alignment.blocks[b].length;
+				tPos += alignment.blocks[b].length;
+        AddGaps(alignment, b+1, opSize, opChar, qPos, tPos);
       }
-    }
-    if (alignment.tStrand == 1) {
-      reverse(opSize.begin(), opSize.end());
-      reverse(opChar.begin(), opChar.end());
     }
   }
 
@@ -279,24 +321,12 @@ namespace SAMOutput {
     // All cigarString use the no clipping core
     vector<int> opSize;
     vector<char> opChar;
-    CreateNoClippingCigarOps(alignment, opSize, opChar);
-
-    // Clipping needs to be added
-
+		prefixSoftClip = prefixHardClip = 0;
+		suffixSoftClip = suffixHardClip = 0;
     if (clipping == hard) {
-
       SetHardClip(alignment, read, prefixHardClip, suffixHardClip);
-      if (prefixHardClip > 0) {
-        opSize.insert(opSize.begin(), prefixHardClip);
-        opChar.insert(opChar.begin(), 'H');
-      }
-      if (suffixHardClip > 0) {
-        opSize.push_back(suffixHardClip);
-        opChar.push_back('H');
-      }
-			prefixSoftClip = 0;
-			suffixSoftClip = 0;
-    }
+		}
+		
     if (clipping == soft or clipping == subread) {
       //
       // Even if clipping is soft, the hard clipping removes the 
@@ -312,42 +342,47 @@ namespace SAMOutput {
 			}
 
 			SetSoftClip(alignment, read, prefixHardClip, suffixHardClip, prefixSoftClip, suffixSoftClip);
+		}
 
-      if (alignment.tStrand == 1) {
-        swap(prefixHardClip, suffixHardClip);
-        swap(prefixSoftClip, suffixSoftClip);
-      }
+		//
+		// The position of the alignment in the query and target.
+		//
+		int qPos = 0;
+		int tPos = 0;
 
-      //
-      // Insert the hard and soft clipping so that they are in the
-      // order H then S if both exist.
-      //
-      if (prefixSoftClip > 0) {
-        opSize.insert(opSize.begin(), prefixSoftClip);
-        opChar.insert(opChar.begin(), 'S');
-      }
-      if (prefixHardClip > 0) {
-        opSize.insert(opSize.begin(), prefixHardClip);
-        opChar.insert(opChar.begin(), 'H');
-      }
+		if (prefixHardClip > 0) {
+			opSize.push_back(prefixHardClip);
+			opChar.push_back('H');
+		}
+		if (prefixSoftClip > 0) {
+			opSize.push_back(prefixSoftClip);
+			opChar.push_back('S');
+		}
+		
+    CreateNoClippingCigarOps(alignment, qPos, tPos, opSize, opChar);
       
-      //
-      // Append the hard and soft clipping so they are in the order S
-      // then H. 
-      //
-      if (suffixSoftClip > 0) {
-        opSize.push_back(suffixSoftClip);
-        opChar.push_back('S');
-      }
-      if (suffixHardClip > 0) {
-        opSize.push_back(suffixHardClip);
-        opChar.push_back('H');
-      }
+		//
+		// Append the hard and soft clipping so they are in the order S
+		// then H. 
+		//
+		if (suffixSoftClip > 0) {
+			opSize.push_back(suffixSoftClip);
+			opChar.push_back('S');
+		}
+		if (suffixHardClip > 0) {
+			opSize.push_back(suffixHardClip);
+			opChar.push_back('H');
+		}
+
+    if (alignment.tStrand == 1) {
+      reverse(opSize.begin(), opSize.end());
+      reverse(opChar.begin(), opChar.end());
     }
 
     CigarOpsToString(opSize, opChar, cigarString);
-
   }
+
+
   template<typename T_Sequence>
   void PrintAlignment(T_AlignmentCandidate &alignment,
                       T_Sequence &read,
@@ -388,26 +423,9 @@ namespace SAMOutput {
 
     string rNext;
     rNext = "*";
-    /*
-    if (context.hasNextSubreadPos == false) {
-      rNext = "*";
-    }
-    else {
-      if (context.rNext == alignment.tName) {
-        rNext = "=";
-      }
-      else {
-        rNext = context.rNext;
-      }
-    }
-    */
     samFile << rNext << "\t"; // RNEXT
     
     DNALength nextSubreadPos = 0;
-    /*
-    if (context.hasNextSubreadPos) {
-      nextSubreadPos = context.nextSubreadPos + 1;
-      }*/
     samFile << nextSubreadPos << "\t"; // RNEXT, add 1 for 1 based
                                            // indexing
 
@@ -418,6 +436,7 @@ namespace SAMOutput {
     // newline (by setting the line length to alignedSequence.length
     ((DNASequence)alignedSequence).PrintSeq(samFile, 0);  // SEQ
     samFile << "\t";
+
     if (alignedSequence.qual.data != NULL) {
       alignedSequence.PrintAsciiQual(samFile, 0);  // QUAL
     }
@@ -463,7 +482,12 @@ namespace SAMOutput {
 			samFile << "XS:i:" << xs + 1 << "\t"; // add 1 for 1-based indexing in sam
 			assert(read.length - suffixHardClip == prefixHardClip + alignedSequence.length);
 			samFile << "XE:i:" << xe + 1 << "\t";
+			samFile << "qs:i:" << xs + 1 << "\t"; // add 1 for 1-based indexing in sam
+			assert(read.length - suffixHardClip == prefixHardClip + alignedSequence.length);
+			samFile << "qe:i:" << xe + 1 << "\t";
+
 		}
+		samFile << "zm:i:" << read.holeNumber << "\t";
     samFile << "XL:i:" << alignment.qAlignedSeq.length << "\t";
     samFile << "XT:i:1\t"; // reads are allways continuous reads, not
                         // referenced based circular consensus when
@@ -480,6 +504,88 @@ namespace SAMOutput {
 		// First transform characters that are too large to printable ones.
 		qvlist.FormatQVOptionalFields(alignedSequence);
 		qvlist.PrintQVOptionalFields(alignedSequence, samFile);
+
+    samFile << endl;
+
+    alignedSequence.FreeIfControlled();
+  }
+  template<typename T_Sequence>
+  void PrintUnalignedRead(T_Sequence &read,
+                      ostream &samFile,
+                      AlignmentContext &context,
+                      SupplementalQVList &qvlist,
+                      Clipping clipping = none,
+                      int subreadIndex = 0,
+                      int nSubreads = 0) {
+    uint16_t flag = SEGMENT_UNMAPPED;
+    T_Sequence alignedSequence;
+    DNALength clippedReadLength = read.subreadEnd - read.subreadStart;
+    DNALength clippedStartPos = read.subreadStart;
+
+    // Return if subread sequence would be out of bounds.
+    if (!(clippedStartPos >= 0 && clippedStartPos <= read.length && clippedReadLength >= 0 && clippedReadLength <= read.length)) {
+      return;
+    }
+
+    alignedSequence.ReferenceSubstring(read, clippedStartPos, clippedReadLength);
+
+    // Return if the subread has no sequence.
+    if (alignedSequence.length == 0) {
+      return;
+    }
+
+    // Unmapped reads have fixed defaults for most fields.
+    samFile << read.GetName() << "\t" << flag << "\t*\t0\t0\t*\t*\t0\t0\t";   // RNAME, POS, MAP, CIGAR, RNEXT, PNEXT, TLEN
+
+    ((DNASequence)alignedSequence).PrintSeq(samFile, 0);  // SEQ
+    samFile << "\t";
+		//
+		// The quality is largely uninformative, so it is skipped and the null flag is output.
+		//
+		samFile <<"*";
+    samFile << "\t";
+
+    //
+    // Add optional fields
+    //
+    samFile << "RG:Z:" << context.readGroupId << "\t";
+
+		// must recompute the
+    //
+    // "RG" read group Id
+    // "XQ" query sequence length
+    // "XT" # of continues reads, always 1 for blasr
+    //
+	  if (clipping == subread) {
+			DNALength xs = read.subreadStart;
+			DNALength xe = read.subreadEnd;
+			samFile << "XS:i:" << xs + 1 << "\t"; // add 1 for 1-based indexing in sam
+			samFile << "XE:i:" << xe + 1 << "\t";
+			samFile << "qs:i:" << xs + 1 << "\t"; // add 1 for 1-based indexing in sam
+			samFile << "qe:i:" << xe + 1 << "\t";
+		}
+		else {
+			samFile << "XS:i:1\t"
+							<< "XE:i:"<<alignedSequence.length <<"\t"
+							<< "qs:i:1\t"
+							<< "qe:i:"<<alignedSequence.length << "\t";
+		}
+		samFile << "zm:i:" << read.holeNumber << "\t";
+    samFile << "XL:i:" << 0 << "\t";
+
+    samFile << "XT:i:1"; // reads are allways continuous reads, not
+                        // referenced based circular consensus when
+                        // output by blasr.
+    // Add query sequence length
+    samFile << "\t" << "XQ:i:" << alignedSequence.length;
+
+		//
+		// Write out optional quality values.  If qvlist does not
+		// have any qv's signaled to print, this is a no-op.
+		//
+		// First transform characters that are too large to printable ones.
+		qvlist.FormatQVOptionalFields(read);
+		qvlist.PrintQVOptionalFields(read, samFile);
 
     samFile << endl;
 

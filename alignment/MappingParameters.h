@@ -25,6 +25,7 @@ class MappingParameters {
   int deletion;
   int mismatch;
 	int sdpTupleSize;
+	int sdpPrefix;
 	int match;
 	int showAlign;
 	int refineAlign;
@@ -73,14 +74,13 @@ class MappingParameters {
 	float subsample;
 	int sortRefinedAlignments;
 	int verbosity;
+	int progress;
   bool printSAM;
   bool storeMapQV;
   bool useRandomSeed;
   int  randomSeed;
   bool placeRandomly;
   bool printHeader;
-  bool samplePaths;
-  bool warp, nowarp;
 	bool usePrefixLookupTable;
 	bool doSensitiveSearch;
 	bool emulateNucmer;
@@ -170,8 +170,10 @@ class MappingParameters {
   int   limsAlign;
 	int  minAlignLength;
 	string findex;
+	int minInterval;
 	vector<string> samqv;
 	SupplementalQVList samQVList;
+	bool alignContigs;
 	void Init() {
     readIndex = -1;
     maxReadIndex = -1;
@@ -190,6 +192,7 @@ class MappingParameters {
     sdpIns   = 5;
     sdpDel   = 10;
 		sdpTupleSize = 11;
+		sdpPrefix=50;
 		match = 0;
     mismatch = 0;
 		showAlign = 1;
@@ -233,6 +236,7 @@ class MappingParameters {
 		listTupleSize = 6;
 		sortRefinedAlignments = 1;
 		anchorParameters.verbosity = verbosity = 0;
+		progress = 0;
 		saTupleMetrics.Initialize(listTupleSize);
 		sdpTupleMetrics.Initialize(sdpTupleSize);
 		qualityLowerCaseThreshold = 0;
@@ -242,10 +246,7 @@ class MappingParameters {
     useRandomSeed = false;
     randomSeed = 0;
     placeRandomly = false;
-    samplePaths = false;
-    nowarp = false;
     storeMapQV = true;
-    warp = true;
     extendDenovoCCSSubreads = false;
 		storeMetrics = false;
 		ignoreQualities = true;
@@ -318,15 +319,15 @@ class MappingParameters {
     preserveReadTitle = false;
     forwardOnly = false;
     printOnlyBest = false;
-    affineAlign = false;
-    affineExtend = 0;
-    affineOpen   = 10;
+    affineAlign = true;
+    affineExtend = 30;
+    affineOpen   = 0;
     scaleMapQVByNumSignificantClusters = false;
     limsAlign = 0;
 		minAlignLength = 0;
 		findex = "";
-
-		
+		alignContigs = false;
+		minInterval = 100;
 	}
 
 	MappingParameters() {
@@ -338,10 +339,7 @@ class MappingParameters {
 		// Fix all logical incompatibilities with parameters.
 		//
 		
-    if (nowarp) {
-      warp = false;
-    }
-
+    
 		if (nCandidates < nBest) {
       nCandidates = nBest;
 		}
@@ -416,11 +414,24 @@ class MappingParameters {
 			cout << "ERROR, subsample and stride must be used independently." << endl;
 			exit(1);
 		}
-    
+
     if (subreadMapType < 0 or subreadMapType > 1) {
       cout << "Error, subreadImplType must be 0 or 1" << endl;
       exit(1);
     }
+
+		if (alignContigs) {
+			refineAlignments = false;
+			refineBetweenAnchorsOnly = true;
+			minMatchLength = anchorParameters.minMatchLength = 20;
+			anchorParameters.advanceExactMatches = advanceExactMatches = 20;
+			anchorParameters.maxLCPLength = 25;
+			affineAlign = true;
+			affineExtend = 0;
+			affineOpen   = 20;
+			anchorParameters.maxAnchorsPerPosition = 100;
+			indelRate = 0.0001;
+		}
 
 		if (emulateNucmer) {
       SetEmulateNucmer();
@@ -429,10 +440,17 @@ class MappingParameters {
     if (randomSeed != 0) {
       useRandomSeed = true;
     }
+
+
     if (printSAM) {
       printFormat = SAM;
       forPicard = true;
     }
+
+		if (printFormat > SAM) {
+			cout << "ERROR. Output format must be between 0 and " << SAM << endl;
+			exit(1);
+		}
     //
     // Parse the clipping.
     //
@@ -467,8 +485,13 @@ class MappingParameters {
 			samQVList.SetDefaultQV();
 		}
 		else {
-			samQVList.UseQV(samqv);
+			if (samqv[0] != "none") {
+				samQVList.UseQV(samqv);
+			}
 		}
+		affineAlign = true;
+		//		affineOpen  = 30;
+		//		affineExtend = 0;
   }
 
   void SetEmulateNucmer() {
@@ -477,9 +500,11 @@ class MappingParameters {
     anchorParameters.maxAnchorsPerPosition = 1;
     sdpBypassThreshold                     = 0.75;
     sdpTupleSize                           = 15;
+		sdpPrefix                              = 0;
     anchorParameters.minMatchLength        = 30;
     useGuidedAlign                         = true;
     refineAlignments                       = false;
+		refineBetweenAnchorsOnly               = true;
   }
 
   void SetForSensitivity() {
