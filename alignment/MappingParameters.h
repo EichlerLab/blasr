@@ -8,6 +8,8 @@
 #include "qvs/QualityValue.h"
 #include "algorithms/alignment/printers/SAMPrinter.h"
 #include "algorithms/alignment/AlignmentFormats.h"
+#include "algorithms/anchoring/IntervalSearchParameters.h"
+#include "algorithms/alignment/BaseScoreFunction.h"
 
 class MappingParameters {
  public:
@@ -155,6 +157,7 @@ class MappingParameters {
   int   globalDeletionPrior;
   bool  outputByThread;
   int   maxReadIndex;
+	int   recurse;
   int   recurseOver;
   bool  forPicard;
   bool  separateGaps;
@@ -174,6 +177,11 @@ class MappingParameters {
 	vector<string> samqv;
 	SupplementalQVList samQVList;
 	bool alignContigs;
+	int minMapQV;
+	bool removeContainedIntervals;
+	int sdpMaxAnchorsPerPosition;
+	int maxRefine;
+	int maxAnchorGap;
 	void Init() {
     readIndex = -1;
     maxReadIndex = -1;
@@ -311,7 +319,8 @@ class MappingParameters {
     substitutionPrior = 20;
     globalDeletionPrior = 13;
     outputByThread = false;
-    recurseOver = 10000;
+		recurse = 2;
+    recurseOver = 100000;
     forPicard = false;
     separateGaps = false;
     scoreMatrixString = "";
@@ -328,6 +337,11 @@ class MappingParameters {
 		findex = "";
 		alignContigs = false;
 		minInterval = 100;
+		minMapQV = 0;
+		removeContainedIntervals = false;
+		sdpMaxAnchorsPerPosition = 0; // default to any number
+		maxRefine = 1000000;
+		maxAnchorGap = 0;
 	}
 
 	MappingParameters() {
@@ -423,14 +437,23 @@ class MappingParameters {
 		if (alignContigs) {
 			refineAlignments = false;
 			refineBetweenAnchorsOnly = true;
-			minMatchLength = anchorParameters.minMatchLength = 20;
-			anchorParameters.advanceExactMatches = advanceExactMatches = 20;
-			anchorParameters.maxLCPLength = 25;
+			
+			minMatchLength = anchorParameters.minMatchLength = max(minMatchLength, 30);
+			anchorParameters.advanceExactMatches = advanceExactMatches = 0;
+
+			anchorParameters.maxLCPLength = max(minMatchLength, max(31, anchorParameters.maxLCPLength+1));
+			
 			affineAlign = true;
 			affineExtend = 0;
 			affineOpen   = 20;
-			anchorParameters.maxAnchorsPerPosition = 100;
-			indelRate = 0.0001;
+			anchorParameters.maxAnchorsPerPosition = 30;
+			indelRate = 0.1;
+			clipping = SAMOutput::soft;
+			removeContainedIntervals = true;
+			// Good for human alignments
+			//			maxAnchorGap = 40000;
+			insertion = 8;
+			deletion  = 8;
 		}
 
 		if (emulateNucmer) {
@@ -524,7 +547,23 @@ class MappingParameters {
 			return false;
 		}
 	}
+	void InitializeIntervalSearchParameters(IntervalSearchParameters &intervalSearchParameters) {
+		intervalSearchParameters.globalChainType = globalChainType;
+		intervalSearchParameters.overlap         = overlap;
+		intervalSearchParameters.minMatch        = minMatchLength;
+		intervalSearchParameters.minInterval     = minInterval;
+		intervalSearchParameters.maxAnchorGap    = maxAnchorGap;
+	}
+
+	void InitializeScoreFunction(BaseScoreFunction &f) {
+		f.del = deletion;
+		f.ins = insertion;
+		f.affineOpen = affineOpen;
+		f.affineExtend = affineExtend;
+	}
+
 };
+
 
 
 #endif
