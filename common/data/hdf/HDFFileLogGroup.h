@@ -14,13 +14,20 @@ class HDFFileLogGroup {
   HDFArray<string> programArray;
 
   int Initialize(HDFGroup &parentGroup) {
-    if (group.Initialize(parentGroup.group, "FileLog") == 0) { return 0; }
-    commandLineArray.Initialize(group, "CommandLine");
-    versionArray.Initialize(group, "Version");
-    timestampArray.Initialize(group, "Timestamp");
-    idArray.Initialize(group, "ID");
-    logArray.Initialize(group, "Log");
-    programArray.Initialize(group, "Program");
+    if (group.Initialize(parentGroup.group, "FileLog") == 0) {
+        return 0;
+    }
+
+    int ret = 1;
+
+    ret *= commandLineArray.Initialize(group, "CommandLine");
+    ret *= versionArray.Initialize(group, "Version");
+    ret *= timestampArray.Initialize(group, "Timestamp");
+    ret *= idArray.Initialize(group, "ID");
+    ret *= logArray.Initialize(group, "Log");
+    ret *= programArray.Initialize(group, "Program");
+
+    return ret;
   }
 
   
